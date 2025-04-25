@@ -1,0 +1,12 @@
+{
+  "Version": 1,
+  "Hash": "MydsQKHrqf6xRxIrWTq1QxPN0oepB3Z47IaEHZYaLlg=",
+  "Source": "JiraApi",
+  "BasePath": "_content/JiraApi",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": [],
+  "Endpoints": []
+}
