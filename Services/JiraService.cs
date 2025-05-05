@@ -1,8 +1,8 @@
 using System.Net.Http.Headers;
 using System.Text;
-using System.Text.Json;
 using JiraApi.Dto;
-using JiraApi.Models;
+using JiraApi.Model;
+using Microsoft.Extensions.Options;
 using Newtonsoft.Json.Linq;
 
 namespace JiraApi.Services
@@ -10,103 +10,67 @@ namespace JiraApi.Services
     public class JiraService
     {
         private readonly HttpClient _httpClient;
-        private readonly string _baseUrl;
+        private readonly JiraSettings _settings;
 
-        public JiraService(string baseUrl, string email, string apiToken)
+        public JiraService(HttpClient httpClient, IOptions<JiraSettings> options)
         {
-            _baseUrl = baseUrl;
+            _settings = options.Value;
+            _httpClient = httpClient;
+            _httpClient.BaseAddress = new Uri(_settings.BaseUrl);
 
-            _httpClient = new HttpClient();
-            var credentials = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{email}:{apiToken}"));
-            _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
-            _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        }
-
-        public async Task<Dictionary<string, List<string>>> GetUsersByProjectAsync()
-        {
-            var result = new Dictionary<string, List<string>>();
-
-            var projectsResponse = await _httpClient.GetAsync($"{_baseUrl}/rest/api/3/project");
-            projectsResponse.EnsureSuccessStatusCode();
-
-            var projectsJson = await projectsResponse.Content.ReadAsStringAsync();
-            var projects = JsonSerializer.Deserialize<List<Project>>(projectsJson);
-
-            foreach (var project in projects)
-            {
-                var rolesResponse = await _httpClient.GetAsync($"{_baseUrl}/rest/api/3/project/{project.Key}/role");
-                rolesResponse.EnsureSuccessStatusCode();
-
-                var rolesJson = await rolesResponse.Content.ReadAsStringAsync();
-                var roles = JsonSerializer.Deserialize<Dictionary<string, string>>(rolesJson);
-
-                foreach (var roleUrl in roles.Values)
-                {
-                    var roleDetailResponse = await _httpClient.GetAsync(roleUrl);
-                    roleDetailResponse.EnsureSuccessStatusCode();
-
-                    var roleDetailJson = await roleDetailResponse.Content.ReadAsStringAsync();
-                    var role = JsonSerializer.Deserialize<RoleDetail>(roleDetailJson);
-
-                    if (role?.Actors != null)
-                    {
-                        foreach (var actor in role.Actors)
-                        {
-                            if (actor.Type == "atlassian-user-role-actor")
-                            {
-                                var user = actor.DisplayName;
-                                if (!result.ContainsKey(user))
-                                    result[user] = new List<string>();
-
-                                if (!result[user].Contains(project.Name))
-                                    result[user].Add(project.Name);
-                            }
-                        }
-                    }
-                }
-            }
-
-            return result;
+            var creds = Convert.ToBase64String(
+                Encoding.ASCII.GetBytes($"{_settings.Email}:{_settings.ApiToken}")
+            );
+            _httpClient.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Basic", creds);
+            _httpClient.DefaultRequestHeaders.Accept
+                .Add(new MediaTypeWithQualityHeaderValue("application/json"));
         }
 
         public async Task<List<IssueDto>> GetIssuesByProjectAsync(string projectKey)
         {
             var issues = new List<IssueDto>();
             int startAt = 0;
-            int maxResults = 50;
+            const int max = 50;
 
             while (true)
             {
-                var url = $"/rest/api/3/search?jql=project={projectKey}&startAt={startAt}&maxResults={maxResults}";
-                var response = await _httpClient.GetAsync(url);
+                var response = await _httpClient.GetAsync(
+                    $"/rest/api/3/search?jql=project={projectKey}&startAt={startAt}&maxResults={max}"
+                );
                 response.EnsureSuccessStatusCode();
 
                 var content = await response.Content.ReadAsStringAsync();
                 var json = JObject.Parse(content);
+                var arr = (JArray)json["issues"]!;
 
-                foreach (var issue in json["issues"]!)
+                foreach (JObject issueObj in arr)
                 {
+                    var fields = issueObj["fields"]!;
+                    // pull attachments safely
+                    var attachments = fields["attachment"]?
+                        .Select(a => new AttachmentDto
+                        {
+                            FileName = a["filename"]?.Value<string>() ?? "",
+                            ContentUrl = a["content"]?.Value<string>() ?? ""
+                        })
+                        .ToList()
+                        ?? new List<AttachmentDto>();
+
                     issues.Add(new IssueDto
                     {
-                        Key = (string)issue["key"],
-                        Summary = (string)issue["fields"]?["summary"],
-                        Description = (string)issue["fields"]?["description"],
-                        Created = (string)issue["fields"]?["created"],
-                        Status = (string)issue["fields"]?["status"]?["name"],
-                        Attachments = issue["fields"]?["attachment"]?
-                            .Select(a => new AttachmentDto
-                            {
-                                FileName = (string)a["filename"],
-                                ContentUrl = (string)a["content"]
-                            }).ToList() ?? new List<AttachmentDto>()
+                        Key = issueObj["key"]?.Value<string>() ?? "",
+                        Summary = fields["summary"]?.Value<string>() ?? "",
+                        Description = fields["description"]?.ToString() ?? "",
+                        Created = fields["created"]?.Value<string>() ?? "",
+                        Status = fields["status"]?["name"]?.Value<string>() ?? "",
+                        Attachments = attachments
                     });
                 }
 
-                int total = (int)json["total"];
-                startAt += maxResults;
-
-                if (startAt >= total)
-                    break;
+                int total = json["total"]!.Value<int>();
+                startAt += max;
+                if (startAt >= total) break;
             }
 
             return issues;
