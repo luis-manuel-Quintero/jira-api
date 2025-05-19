@@ -27,7 +27,7 @@ namespace JiraApi.Controllers
 
             var allAttachments = issues.SelectMany(i => i.Attachments).ToList();
             var folder = $"attachments_{projectKey}";
-            await _jiraService.DownloadAttachmentsAsync(allAttachments, folder);
+            //await _jiraService.DownloadAttachmentsAsync(allAttachments, folder);
 
             return Ok(new
             {
