@@ -14,6 +14,7 @@ builder.Services.Configure<JiraSettings>(
 // 2️⃣ Register your JiraService and CsvExporter
 builder.Services.AddHttpClient<JiraService>();
 builder.Services.AddSingleton<CsvExporter>();
+builder.Services.AddSingleton<ExcelExporter>();
 
 // 3️⃣ Add controllers
 builder.Services.AddControllers();
