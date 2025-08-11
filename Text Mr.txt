@@ -1,1 +1,2 @@
-this is just a merge test 1
+this is just a merge test 2
+
