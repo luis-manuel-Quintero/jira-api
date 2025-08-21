@@ -1,23 +1,23 @@
 {
   "format": 1,
   "restore": {
-    "C:\\Users\\Gonzalo.Ramirez\\projects\\JiraApi\\JiraApi.csproj": {}
+    "C:\\Users\\luis.quintero\\JiraExportTool\\jira-api\\JiraApi.csproj": {}
   },
   "projects": {
-    "C:\\Users\\Gonzalo.Ramirez\\projects\\JiraApi\\JiraApi.csproj": {
+    "C:\\Users\\luis.quintero\\JiraExportTool\\jira-api\\JiraApi.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "C:\\Users\\Gonzalo.Ramirez\\projects\\JiraApi\\JiraApi.csproj",
+        "projectUniqueName": "C:\\Users\\luis.quintero\\JiraExportTool\\jira-api\\JiraApi.csproj",
         "projectName": "JiraApi",
-        "projectPath": "C:\\Users\\Gonzalo.Ramirez\\projects\\JiraApi\\JiraApi.csproj",
-        "packagesPath": "C:\\Users\\Gonzalo.Ramirez\\.nuget\\packages\\",
-        "outputPath": "C:\\Users\\Gonzalo.Ramirez\\projects\\JiraApi\\obj\\",
+        "projectPath": "C:\\Users\\luis.quintero\\JiraExportTool\\jira-api\\JiraApi.csproj",
+        "packagesPath": "C:\\Users\\luis.quintero\\.nuget\\packages\\",
+        "outputPath": "C:\\Users\\luis.quintero\\JiraExportTool\\jira-api\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
         ],
         "configFilePaths": [
-          "C:\\Users\\Gonzalo.Ramirez\\AppData\\Roaming\\NuGet\\NuGet.Config",
+          "C:\\Users\\luis.quintero\\AppData\\Roaming\\NuGet\\NuGet.Config",
           "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
           "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
         ],
@@ -26,6 +26,7 @@
         ],
         "sources": {
           "C:\\Program Files (x86)\\Microsoft SDKs\\NuGetPackages\\": {},
+          "C:\\Program Files\\dotnet\\library-packs": {},
           "https://api.nuget.org/v3/index.json": {}
         },
         "frameworks": {
@@ -44,12 +45,16 @@
           "auditLevel": "low",
           "auditMode": "direct"
         },
-        "SdkAnalysisLevel": "9.0.100"
+        "SdkAnalysisLevel": "9.0.200"
       },
       "frameworks": {
         "net9.0": {
           "targetAlias": "net9.0",
           "dependencies": {
+            "ClosedXML": {
+              "target": "Package",
+              "version": "[0.105.0, )"
+            },
             "CsvHelper": {
               "target": "Package",
               "version": "[33.0.1, )"
@@ -61,6 +66,22 @@
             "Newtonsoft.Json": {
               "target": "Package",
               "version": "[13.0.3, )"
+            },
+            "Swashbuckle.AspNetCore": {
+              "target": "Package",
+              "version": "[8.1.1, )"
+            },
+            "Swashbuckle.AspNetCore.Swagger": {
+              "target": "Package",
+              "version": "[8.1.1, )"
+            },
+            "Swashbuckle.AspNetCore.SwaggerGen": {
+              "target": "Package",
+              "version": "[8.1.1, )"
+            },
+            "Swashbuckle.AspNetCore.SwaggerUI": {
+              "target": "Package",
+              "version": "[8.1.1, )"
             }
           },
           "imports": [
@@ -82,7 +103,7 @@
               "privateAssets": "all"
             }
           },
-          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.101/PortableRuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.203/PortableRuntimeIdentifierGraph.json"
         }
       }
     }

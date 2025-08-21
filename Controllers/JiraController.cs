@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using JiraApi.Services;
+using JiraApi.Model;
 using JiraApi.Helper;
 
 namespace JiraApi.Controllers
@@ -8,46 +9,52 @@ namespace JiraApi.Controllers
     [Route("api/[controller]")]
     public class JiraController : ControllerBase
     {
+        private readonly JiraService _jiraService;
         private readonly CsvExporter _csvExporter;
+        private readonly ExcelExporter _excelExporter;
 
-        public JiraController(CsvExporter csvExporter)
+        public JiraController(JiraService jiraService, CsvExporter csvExporter, ExcelExporter excelExporter)
         {
+            _jiraService = jiraService;
             _csvExporter = csvExporter;
-        }
-
-        [HttpGet("usuarios-proyectos")]
-        public async Task<IActionResult> GetUsuariosProyectos()
-        {
-            var baseUrl = "https://encoracsa.atlassian.net/";
-            var email = "email";
-            var token = "api-key";
-
-            var jiraService = new JiraService(baseUrl, email, token);
-            var data = await jiraService.GetUsersByProjectAsync();
-
-            return Ok(data);
+            _excelExporter = excelExporter;
         }
 
         [HttpGet("issues-proyecto/{projectKey}")]
-        public async Task<IActionResult> ExportIssues(string projectKey)
+        public async Task<IActionResult> ExportIssues(
+            string projectKey,
+            [FromQuery(Name = "customFields")] string[] customFields   // e.g. ?customFields=dirreccion&customFields=responsable
+        )
         {
-            var baseUrl = "https://encoracsa.atlassian.net/";
-            var email = "email";
-            var token = "api-key";
+            // Pass the list into your service:
+            var issues = await _jiraService.GetIssuesByProjectAsync(projectKey, customFields);
 
-            var _jiraService = new JiraService(baseUrl, email, token);
-            var issues = await _jiraService.GetIssuesByProjectAsync(projectKey);
-            _csvExporter.ExportIssuesToCsv(issues, $"{projectKey}_issues.csv");
+            var fileName = $"{projectKey}_issues.xlsx";
 
-            var allAttachments = issues.SelectMany(i => i.Attachments).ToList();
-            await _jiraService.DownloadAttachmentsAsync(allAttachments, $"attachments_{projectKey}");
+            _excelExporter.ExportIssuesToExcel(issues, fileName, customFields);
 
-            return Ok(new
-            {
-                message = $"Exportados {issues.Count} issues y {allAttachments.Count} archivos adjuntos",
-                issuesCsv = $"{projectKey}_issues.csv",
-                attachmentsFolder = $"attachments_{projectKey}/"
-            });
+            var fileBytes = await System.IO.File.ReadAllBytesAsync(fileName);
+
+            // Export to CSV, including custom fields:
+            //var csvFile = $"{projectKey}_issues.csv";
+            //_csvExporter.ExportIssuesToCsv(issues, csvFile, customFields);
+            var totalAttachments = issues.SelectMany(i => i.Attachments).Count();
+            // Log or print the total (you can log or return in headers)
+            Console.WriteLine($"Exported {issues.Count} issues with {totalAttachments} total attachments.");
+
+            // Optional: return metadata in headers
+            Response.Headers.Add("X-Issue-Count", issues.Count.ToString());
+            Response.Headers.Add("X-Attachment-Count", totalAttachments.ToString());
+
+            //var allAttachments = issues.SelectMany(i => i.Attachments).ToList();
+            //var folder = $"attachments_{projectKey}";
+            //await _jiraService.DownloadAttachmentsAsync(issues, folder);
+
+            return File(
+                        fileBytes,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        fileName
+                    );
         }
     }
 }

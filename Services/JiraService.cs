@@ -1,130 +1,187 @@
+﻿using System.IO.Compression;
 using System.Net.Http.Headers;
 using System.Text;
-using System.Text.Json;
+using System.Xml.Linq;
 using JiraApi.Dto;
-using JiraApi.Models;
+using JiraApi.Model;
+using Microsoft.Extensions.Options;
 using Newtonsoft.Json.Linq;
+using System.IO.Compression;
 
 namespace JiraApi.Services
 {
     public class JiraService
     {
-        private readonly HttpClient _httpClient;
-        private readonly string _baseUrl;
+        private readonly HttpClient   _httpClient;
+        private readonly JiraSettings _settings;
 
-        public JiraService(string baseUrl, string email, string apiToken)
+        public JiraService(HttpClient httpClient, IOptions<JiraSettings> options)
         {
-            _baseUrl = baseUrl;
+            _settings    = options.Value;
+            _httpClient  = httpClient;
+            _httpClient.BaseAddress = new Uri(_settings.BaseUrl);
 
-            _httpClient = new HttpClient();
-            var credentials = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{email}:{apiToken}"));
-            _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Basic", credentials);
-            _httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            var creds = Convert.ToBase64String(
+                Encoding.ASCII.GetBytes($"{_settings.Email}:{_settings.ApiToken}")
+            );
+            _httpClient.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Basic", creds);
+            _httpClient.DefaultRequestHeaders.Accept
+                .Add(new MediaTypeWithQualityHeaderValue("application/json"));
         }
 
-        public async Task<Dictionary<string, List<string>>> GetUsersByProjectAsync()
+        /// <summary>
+        /// Builds a map of all Jira field names → their internal IDs (e.g. "Responsable" → "customfield_10023")
+        /// </summary>
+        private async Task<Dictionary<string, string>> GetFieldNameIdMapAsync()
         {
-            var result = new Dictionary<string, List<string>>();
+            var response = await _httpClient.GetAsync("/rest/api/3/field");
+            response.EnsureSuccessStatusCode();
 
-            var projectsResponse = await _httpClient.GetAsync($"{_baseUrl}/rest/api/3/project");
-            projectsResponse.EnsureSuccessStatusCode();
-
-            var projectsJson = await projectsResponse.Content.ReadAsStringAsync();
-            var projects = JsonSerializer.Deserialize<List<Project>>(projectsJson);
-
-            foreach (var project in projects)
-            {
-                var rolesResponse = await _httpClient.GetAsync($"{_baseUrl}/rest/api/3/project/{project.Key}/role");
-                rolesResponse.EnsureSuccessStatusCode();
-
-                var rolesJson = await rolesResponse.Content.ReadAsStringAsync();
-                var roles = JsonSerializer.Deserialize<Dictionary<string, string>>(rolesJson);
-
-                foreach (var roleUrl in roles.Values)
-                {
-                    var roleDetailResponse = await _httpClient.GetAsync(roleUrl);
-                    roleDetailResponse.EnsureSuccessStatusCode();
-
-                    var roleDetailJson = await roleDetailResponse.Content.ReadAsStringAsync();
-                    var role = JsonSerializer.Deserialize<RoleDetail>(roleDetailJson);
-
-                    if (role?.Actors != null)
-                    {
-                        foreach (var actor in role.Actors)
-                        {
-                            if (actor.Type == "atlassian-user-role-actor")
-                            {
-                                var user = actor.DisplayName;
-                                if (!result.ContainsKey(user))
-                                    result[user] = new List<string>();
-
-                                if (!result[user].Contains(project.Name))
-                                    result[user].Add(project.Name);
-                            }
-                        }
-                    }
-                }
-            }
-
-            return result;
+            var allFields = JArray.Parse(await response.Content.ReadAsStringAsync());
+            return allFields
+                .Where(f => f["name"] != null && f["id"] != null)
+                .GroupBy(f => f["name"]!.Value<string>()!)
+                .ToDictionary(
+                    grp => grp.Key,
+                    grp => grp.First()["id"]!.Value<string>()!
+                );
         }
 
-        public async Task<List<IssueDto>> GetIssuesByProjectAsync(string projectKey)
+        /// <summary>
+        /// Fetches all issues in the given project, including attachments and any custom fields by display name.
+        /// </summary>
+        public async Task<List<IssueDto>> GetIssuesByProjectAsync(
+            string projectKey,
+            string[] customFieldNames
+        )
         {
-            var issues = new List<IssueDto>();
-            int startAt = 0;
-            int maxResults = 50;
+            // 1️⃣ Map display names → IDs
+            var nameIdMap = await GetFieldNameIdMapAsync();
+            var customFieldIds = customFieldNames
+                .Where(n => nameIdMap.ContainsKey(n))
+                .Select(n => nameIdMap[n])
+                .Distinct()
+                .ToArray();
+
+            // 2️⃣ Build the fields= query: standard + custom IDs
+            var defaultFields = new[] { "issuetype", "summary", "description", "created", "status", "attachment"};
+            var allFields     = defaultFields
+                .Concat(customFieldIds)
+                .Distinct();
+            var fieldsParam   = string.Join(",", allFields);
+
+            var issues  = new List<IssueDto>();
+            int startAt = 0, max = 50;
 
             while (true)
             {
-                var url = $"/rest/api/3/search?jql=project={projectKey}&startAt={startAt}&maxResults={maxResults}";
-                var response = await _httpClient.GetAsync(url);
-                response.EnsureSuccessStatusCode();
+                var url = $"/rest/api/3/search" +
+                          $"?jql=project={projectKey}" +
+                          $"&fields={fieldsParam}" +
+                          $"&startAt={startAt}&maxResults={max}";
 
-                var content = await response.Content.ReadAsStringAsync();
-                var json = JObject.Parse(content);
+                var resp = await _httpClient.GetAsync(url);
+                resp.EnsureSuccessStatusCode();
 
-                foreach (var issue in json["issues"]!)
+                var content = await resp.Content.ReadAsStringAsync();
+                var json    = JObject.Parse(content);
+                var arr     = (JArray)json["issues"]!;
+
+                foreach (JObject issueObj in arr)
                 {
-                    issues.Add(new IssueDto
+                    var fields = issueObj["fields"]!;
+
+                    // --- Attachments parsing ---
+                    var attachmentArray = fields["attachment"] as JArray;
+                    var attachments = attachmentArray?
+                        .Select(a => new AttachmentDto {
+                            FileName   = a["filename"]?.Value<string>() ?? "",
+                            ContentUrl = a["content"]?.Value<string>()  ?? ""
+                        })
+                        .ToList()
+                      ?? new List<AttachmentDto>();
+
+                    var commentArray = (fields["comment"]?["comments"] as JArray)
+                    ?? new JArray();
+
+                    var comments = commentArray
+                        .Select(c => new CommentDto
+                        {
+                            Author = c["author"]?["displayName"]?.Value<string>() ?? "",
+                            Body = c["body"]?.ToString() ?? "",
+                            Created = c["created"]?.Value<string>() ?? ""
+                        })
+                        .ToList();
+
+                    // --- Base DTO ---
+                    var dto = new IssueDto {
+                        Key         = issueObj["key"]?.Value<string>()           ?? "",
+                        IssueType   = fields["issuetype"]?["name"]?.Value<string>() ?? "",
+                        Summary     = fields["summary"]?.Value<string>()         ?? "",
+                        Description = fields["description"]?.ToString()          ?? "",
+                        Created     = fields["created"]?.Value<string>()         ?? "",
+                        Status      = fields["status"]?["name"]?.Value<string>() ?? "",
+                        Attachments = attachments,
+                        Comments = comments,
+                        CustomFields = new Dictionary<string,string>()
+                    };
+
+                    // --- Custom fields extraction by display name ---
+                    foreach (var displayName in customFieldNames)
                     {
-                        Key = (string)issue["key"],
-                        Summary = (string)issue["fields"]?["summary"],
-                        Description = (string)issue["fields"]?["description"],
-                        Created = (string)issue["fields"]?["created"],
-                        Status = (string)issue["fields"]?["status"]?["name"],
-                        Attachments = issue["fields"]?["attachment"]?
-                            .Select(a => new AttachmentDto
-                            {
-                                FileName = (string)a["filename"],
-                                ContentUrl = (string)a["content"]
-                            }).ToList() ?? new List<AttachmentDto>()
-                    });
+                        if (nameIdMap.TryGetValue(displayName, out var fieldId))
+                        {
+                            var token = fields[fieldId];
+                            dto.CustomFields[displayName] = token?.ToString() ?? "";
+                        }
+                        else
+                        {
+                            dto.CustomFields[displayName] = "";
+                        }
+                    }
+
+                    issues.Add(dto);
                 }
 
-                int total = (int)json["total"];
-                startAt += maxResults;
-
-                if (startAt >= total)
-                    break;
+                int total = json["total"]!.Value<int>();
+                startAt += max;
+                if (startAt >= total) break;
             }
 
             return issues;
         }
 
-        public async Task DownloadAttachmentsAsync(IEnumerable<AttachmentDto> attachments, string folderPath)
+        public async Task DownloadAttachmentsAsync(List<IssueDto> issues, string baseFolderPath)
         {
-            Directory.CreateDirectory(folderPath);
+            Directory.CreateDirectory(baseFolderPath);
 
-            foreach (var attachment in attachments)
+            foreach (var issue in issues)
             {
-                var response = await _httpClient.GetAsync(attachment.ContentUrl);
-                response.EnsureSuccessStatusCode();
+                if (issue.Attachments == null || !issue.Attachments.Any())
+                    continue;
 
-                var bytes = await response.Content.ReadAsByteArrayAsync();
-                var filePath = Path.Combine(folderPath, attachment.FileName);
+                var ticketFolder = Path.Combine(baseFolderPath, issue.Key);
+                Directory.CreateDirectory(ticketFolder);
 
-                await File.WriteAllBytesAsync(filePath, bytes);
+                // Download attachments into ticket-specific folder
+                foreach (var attachment in issue.Attachments)
+                {
+                    var response = await _httpClient.GetAsync(attachment.ContentUrl);
+                    response.EnsureSuccessStatusCode();
+
+                    var bytes = await response.Content.ReadAsByteArrayAsync();
+                    var filePath = Path.Combine(ticketFolder, attachment.FileName);
+                    await File.WriteAllBytesAsync(filePath, bytes);
+                }
+
+                // Create ZIP from folder
+                var zipPath = Path.Combine(baseFolderPath, $"{issue.Key}.zip");
+                if (File.Exists(zipPath)) File.Delete(zipPath);
+                ZipFile.CreateFromDirectory(ticketFolder, zipPath);
+
+                // Cleanup original attachment files
+                Directory.Delete(ticketFolder, true);
             }
         }
     }
