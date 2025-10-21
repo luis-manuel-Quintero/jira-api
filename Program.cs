@@ -3,6 +3,7 @@ using JiraApi.Services;
 using JiraApi.Helper;
 using Microsoft.Extensions.Options;
 using Microsoft.OpenApi.Models;
+using QuestPDF.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -15,6 +16,9 @@ builder.Services.Configure<JiraSettings>(
 builder.Services.AddHttpClient<JiraService>();
 builder.Services.AddSingleton<CsvExporter>();
 builder.Services.AddSingleton<ExcelExporter>();
+builder.Services.AddSingleton<PdfExporter>(); 
+builder.Services.AddHttpClient("Jira");  
+
 
 // 3️⃣ Add controllers
 builder.Services.AddControllers();
@@ -42,6 +46,8 @@ if (app.Environment.IsDevelopment())
         // c.RoutePrefix = ""; // uncomment to serve at root
     });
 }
+
+QuestPDF.Settings.License = LicenseType.Community;
 
 app.UseHttpsRedirection();
 app.MapControllers();

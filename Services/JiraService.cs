@@ -7,6 +7,7 @@ using JiraApi.Model;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json.Linq;
 using System.IO.Compression;
+using Newtonsoft.Json;
 
 namespace JiraApi.Services
 {
@@ -184,5 +185,107 @@ namespace JiraApi.Services
                 Directory.Delete(ticketFolder, true);
             }
         }
+
+        public async Task<List<IssueDto>> GetIssuesByProjectWithAllCustomFieldsAsync(string projectKey, bool includeComments = false)
+        {
+            var nameIdMap = await GetFieldNameIdMapAsync();
+            var customFieldIds = nameIdMap.Values
+                .Where(id => id.StartsWith("customfield_"))
+                .Distinct()
+                .ToArray();
+
+            var defaultFields = new[] { "issuetype", "summary", "description", "created", "status", "attachment", "comment" };
+            var allFields = defaultFields.Concat(customFieldIds).Distinct();
+            var fieldsParam = string.Join(",", allFields);
+
+            var issues = new List<IssueDto>();
+            int startAt = 0, max = 50;
+
+            while (true)
+            {
+                var url = $"/rest/api/3/search" +
+                          $"?jql=project={projectKey}" +
+                          $"&fields={fieldsParam}" +
+                          $"&startAt={startAt}&maxResults={max}";
+
+                var resp = await _httpClient.GetAsync(url);
+                resp.EnsureSuccessStatusCode();
+
+                var content = await resp.Content.ReadAsStringAsync();
+
+                JObject json;
+                using (var stringReader = new StringReader(content))
+                using (var jsonReader = new JsonTextReader(stringReader) { MaxDepth = 256 }) // 👈 Límite aumentado
+                {
+                    json = JObject.Load(jsonReader);
+                }
+
+                var arr = (JArray)json["issues"]!;
+
+                foreach (JObject issueObj in arr)
+                {
+                    var fields = issueObj["fields"]!;
+                    var attachmentArray = fields["attachment"] as JArray;
+                    var attachments = attachmentArray?
+                        .Select(a => new AttachmentDto
+                        {
+                            FileName = a["filename"]?.Value<string>() ?? "",
+                            ContentUrl = a["content"]?.Value<string>() ?? ""
+                        })
+                        .ToList()
+                      ?? new List<AttachmentDto>();
+
+                    // 🟡 Agregar comentarios si se solicitó
+                    var comments = new List<CommentDto>();
+                    if (includeComments && fields["comment"]?["comments"] is JArray commentArray)
+                    {
+                        comments = commentArray
+                            .Select(c => new CommentDto
+                            {
+                                Author = c["author"]?["displayName"]?.ToString() ?? "Desconocido",
+                                Body = c["body"]?.ToString() ?? "",
+                                Created = c["created"]?.ToString() ?? ""
+                            })
+                            .ToList();
+                    }
+
+                    var dto = new IssueDto
+                    {
+                        Key = issueObj["key"]?.Value<string>() ?? "",
+                        IssueType = fields["issuetype"]?["name"]?.Value<string>() ?? "",
+                        Summary = fields["summary"]?.Value<string>() ?? "",
+                        Description = fields["description"]?.ToString() ?? "",
+                        Created = fields["created"]?.Value<string>() ?? "",
+                        Status = fields["status"]?["name"]?.Value<string>() ?? "",
+                        Attachments = attachments,
+                        Comments = comments,
+                        CustomFields = new Dictionary<string, string>()
+                    };
+
+                    foreach (var kv in nameIdMap)
+                    {
+                        var token = fields[kv.Value];
+                        dto.CustomFields[kv.Key] = token?.ToString() ?? "";
+                    }
+
+                    issues.Add(dto);
+                }
+
+                int total = json["total"]!.Value<int>();
+                startAt += max;
+                if (startAt >= total) break;
+            }
+
+            return issues;
+        }
+
+
+
+        public HttpClient GetHttpClient()
+        {
+            return _httpClient;
+        }
+
+
     }
 }
